@@ -1,5 +1,26 @@
 # TP Big Data Lakehouse — HDFS (3 DataNodes) + PySpark + Delta Lake + Streamlit
 
+## Notre projet : Steam, marché du jeu vidéo et satisfaction des joueurs
+
+**Auteurs :** Walid Hdilou · Joud Atallah (M2 IPSSI — Architecture Data Lake / Data Warehouse / Lakehouse)
+
+| | |
+|---|---|
+| **Thématique** | Analyse du marché et de la satisfaction des joueurs sur Steam (jeux vidéo) |
+| **Problématique** | Mesurer l'impact du prix, du genre et des caractéristiques des jeux sur le volume d'avis et le taux de recommandation des joueurs |
+| **Dataset #1 — faits** | [`andrewmvd/steam-reviews`](https://www.kaggle.com/datasets/andrewmvd/steam-reviews) : avis joueurs, échantillon uniforme de **3 763 740 avis** (~100,35 Mo, `data_raw/steam-reviews/steam_reviews.csv`) |
+| **Dataset #2 — dimension** | [`nikdavis/steam-store-games`](https://www.kaggle.com/datasets/nikdavis/steam-store-games) : catalogue de **27 075 jeux** (~5,55 Mo, `data_raw/steam-store-games/steam_games.csv`) |
+| **Jointure** | `reviews.app_id = games.appid` (relation N-1, *Broadcast Hash Join* sur la dimension) |
+| **Axe temporel** | `release_date` / `release_year` du catalogue (les avis n'ont pas d'horodatage) |
+
+| Couche | Tables Delta sur HDFS |
+|---|---|
+| Bronze | `/lakehouse/bronze/steam_reviews`, `/lakehouse/bronze/steam_games` |
+| Silver | `/lakehouse/silver/steam_reviews_enriched` (1 ligne = 1 avis enrichi du catalogue), `/lakehouse/silver/steam_games` (catalogue nettoyé) |
+| Gold | `/lakehouse/gold/genre_pareto`, `/lakehouse/gold/release_year_trends`, `/lakehouse/gold/top_games_by_genre` |
+
+---
+
 Environnement pédagogique complet compatible nativement **`linux/amd64` (PC x86_64 / WSL2)** et **`linux/arm64` (Apple Silicon M1–M4 / Linux ARM64)** sur **Ubuntu 26.04 LTS**, reposant sur un **cluster HDFS 3.5 réel distribué (1 NameNode + 3 DataNodes)** avec blocs réduits à **16 Mo** et détection de panne abaissée à **~50 secondes**, couplé à une image mutualisée légère (`ubuntu:26.04` + **Python 3.15** via `uv` + OpenJDK 21 + JARs Delta pré-embarqués) pour **PySpark 4.2**, **Delta Lake 4.4**, **JupyterLab 4.6** et **Streamlit**.
 
 Chaque étudiant / groupe **choisit librement sa thématique métier et combine un dataset multi-tables ou plusieurs datasets publics complémentaires sur Kaggle** (croisés par jointure distribuée) pour construire de bout en bout une architecture **Data Lakehouse Médaillon (Bronze → Silver → Gold → Dashboard)**.
