@@ -1,7 +1,7 @@
 # Captures d'écran du dashboard
 
-Déposer ici les captures (PNG, largeur conseillée 1440 px, thème sombre) avec ces noms, puis décommenter
-le bloc « Aperçu » du README principal :
+Captures du dashboard Streamlit (thème sombre, 1440 × 1100 px) prises sur les vraies tables Gold, affichées
+dans la section « Aperçu » du README principal :
 
 | Fichier | Onglet |
 |---|---|
@@ -11,4 +11,5 @@ le bloc « Aperçu » du README principal :
 | `04-segments-kmeans.png` | Temps de jeu & segments |
 | `05-architecture.png` | Architecture & méthode |
 
-Dashboard local : http://localhost:8501 (après `task up` et l'exécution des notebooks J1 → J4).
+Pour les régénérer : dashboard local sur http://localhost:8501 (après `task up` et l'exécution des notebooks
+J1 → J4), en conservant ces noms de fichiers.

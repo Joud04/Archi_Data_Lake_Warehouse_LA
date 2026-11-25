@@ -93,15 +93,27 @@ Filtres de la barre latérale : genres, gamme de prix, années de sortie, segmen
 
 ### Aperçu
 
-Les captures d'écran sont rangées dans [`docs/screenshots/`](docs/screenshots/) (noms attendus dans le README de ce dossier).
+Captures du dashboard sur les vraies tables Gold (dossier [`docs/screenshots/`](docs/screenshots/)).
 
-<!-- Décommenter une fois les captures ajoutées :
+**Vue exécutive** : KPI du corpus et du périmètre filtré, satisfaction par gamme de prix, gratuit vs payant.
+
 ![Vue exécutive](docs/screenshots/01-vue-executive.png)
+
+**Pareto & genres** : concentration du marché (seuil 80 %), moyenne vs médiane et distributions IQR.
+
 ![Pareto & genres](docs/screenshots/02-pareto-genres.png)
+
+**Dynamique & vitalité** : cohortes annuelles en petits multiples et variations `LAG`.
+
 ![Dynamique & vitalité](docs/screenshots/03-dynamique-vitalite.png)
+
+**Temps de jeu & segments** : centroïdes K-Means et exploration interactive d'un segment.
+
 ![Temps de jeu & segments](docs/screenshots/04-segments-kmeans.png)
+
+**Architecture & méthode** : pipeline Médaillon, chiffres clés de l'infrastructure, qualité des données.
+
 ![Architecture & méthode](docs/screenshots/05-architecture.png)
--->
 
 ---
 
