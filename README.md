@@ -1,10 +1,10 @@
 # Steam Lakehouse Analytics : ce qui fait le succès d'un jeu vidéo
 
+**Auteurs :** **Walid Hdilou** & **Joud Atallah** (Master 2 — IPSSI Lyon)
+
 **Data Lakehouse Médaillon de bout en bout sur un cluster HDFS distribué** : 3,76 millions d'avis Steam et
 27 075 jeux traversent les couches Bronze → Silver → Gold (Apache Spark + Delta Lake), alimentent des tests
 statistiques et une segmentation K-Means (Spark MLlib), puis un dashboard décisionnel Streamlit.
-
-**Auteurs :** Walid Hdilou · Joud Atallah, M2 IPSSI (Architecture Data Lake / Data Warehouse / Lakehouse)
 
 ![HDFS](https://img.shields.io/badge/HDFS-3.5-66c0f4) ![Spark](https://img.shields.io/badge/Apache%20Spark-4.2-e25a1c)
 ![Delta Lake](https://img.shields.io/badge/Delta%20Lake-4.4-00add4) ![MLlib](https://img.shields.io/badge/Spark%20MLlib-K--Means-2a475e)
