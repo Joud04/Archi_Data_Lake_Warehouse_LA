@@ -180,6 +180,11 @@ tasks:
     cmds:
       - "{{.JUPYTER_EXEC}} --output /tmp/J4_out.ipynb /workspace/notebooks/J4_Stats_Segmentation_Dashboard.ipynb"
 
+  test:dashboard:
+    desc: Tester le dashboard Streamlit sur les vraies tables Gold (rendu headless AppTest, filtres, cas vides)
+    cmds:
+      - docker exec -w /workspace streamlit python -m pytest -q -p no:cacheprovider app/test_dashboard.py
+
   test:notebooks:
     desc: Exécuter la chaîne complète des notebooks (Jours 1 à 4) et vérifier les couches Delta sur HDFS
     cmds:

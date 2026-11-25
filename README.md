@@ -1,178 +1,197 @@
-# TP Big Data Lakehouse — HDFS (3 DataNodes) + PySpark + Delta Lake + Streamlit
+# Steam Lakehouse Analytics : ce qui fait le succès d'un jeu vidéo
 
-## Notre projet : Steam, marché du jeu vidéo et satisfaction des joueurs
+**Data Lakehouse Médaillon de bout en bout sur un cluster HDFS distribué** : 3,76 millions d'avis Steam et
+27 075 jeux traversent les couches Bronze → Silver → Gold (Apache Spark + Delta Lake), alimentent des tests
+statistiques et une segmentation K-Means (Spark MLlib), puis un dashboard décisionnel Streamlit.
 
-**Auteurs :** Walid Hdilou · Joud Atallah (M2 IPSSI — Architecture Data Lake / Data Warehouse / Lakehouse)
+**Auteurs :** Walid Hdilou · Joud Atallah, M2 IPSSI (Architecture Data Lake / Data Warehouse / Lakehouse)
+
+![HDFS](https://img.shields.io/badge/HDFS-3.5-66c0f4) ![Spark](https://img.shields.io/badge/Apache%20Spark-4.2-e25a1c)
+![Delta Lake](https://img.shields.io/badge/Delta%20Lake-4.4-00add4) ![MLlib](https://img.shields.io/badge/Spark%20MLlib-K--Means-2a475e)
+![Streamlit](https://img.shields.io/badge/Streamlit-Plotly-ff4b4b) ![Docker](https://img.shields.io/badge/Docker-Compose-2496ed)
+
+---
+
+## Résumé exécutif
 
 | | |
 |---|---|
-| **Thématique** | Analyse du marché et de la satisfaction des joueurs sur Steam (jeux vidéo) |
-| **Problématique** | Mesurer l'impact du prix, du genre et des caractéristiques des jeux sur le volume d'avis et le taux de recommandation des joueurs |
-| **Dataset #1 — faits** | [`andrewmvd/steam-reviews`](https://www.kaggle.com/datasets/andrewmvd/steam-reviews) : avis joueurs, échantillon uniforme de **3 763 740 avis** (~100,35 Mo, `data_raw/steam-reviews/steam_reviews.csv`) |
-| **Dataset #2 — dimension** | [`nikdavis/steam-store-games`](https://www.kaggle.com/datasets/nikdavis/steam-store-games) : catalogue de **27 075 jeux** (~5,55 Mo, `data_raw/steam-store-games/steam_games.csv`) |
-| **Jointure** | `reviews.app_id = games.appid` (relation N-1, *Broadcast Hash Join* sur la dimension) |
-| **Axe temporel** | `release_date` / `release_year` du catalogue (les avis n'ont pas d'horodatage) |
+| **Question métier** | Quels facteurs (prix, genre, ancienneté, temps de jeu) sont associés à une meilleure réception des joueurs, et peut-on segmenter les jeux en profils actionnables ? |
+| **Données** | [`andrewmvd/steam-reviews`](https://www.kaggle.com/datasets/andrewmvd/steam-reviews) (faits : 3 763 740 avis, ~100 Mo) × [`nikdavis/steam-store-games`](https://www.kaggle.com/datasets/nikdavis/steam-store-games) (dimension : 27 075 jeux), jointure `app_id = appid` |
+| **Architecture** | Cluster HDFS 1 NameNode + 3 DataNodes (blocs 16 Mo, réplication 2) → Bronze → Silver → Gold en Delta Lake → Streamlit |
+| **Livrables** | 4 notebooks exécutés (J1 → J4), 4 tables Gold, dashboard en 5 onglets, tests automatisés (`task test:all`, `task test:dashboard`) |
+
+### Résultats clés
+
+- **Marché très concentré** : 5 genres sur 20 portent 86 % des avis, et **8,6 % des jeux concentrent 80 % des avis** (Pareto, fenêtres SQL).
+- **Le prix joue en cloche** : les jeux à 5-15 £ sont les mieux notés (84 % d'avis positifs en médiane) ; gratuits et jeux ≥ 30 £ déçoivent davantage (Kruskal-Wallis, p ≈ 5·10⁻³⁷).
+- **Le temps de jeu aide, mais peu** : corrélation positive et faible avec la satisfaction (Spearman ρ = +0,13).
+- **Les critiques comptent** : un avis négatif est **1,9 fois plus souvent jugé utile** qu'un avis positif (χ², V de Cramér = 0,12).
+- **5 segments K-Means** (k = 5, silhouette 0,35, accord Spark MLlib / scikit-learn ARI = 0,98) : *Hits premium à forte rétention* (67 % des avis), *Anciens classiques*, *Pépites de niche*, *Free-to-play à faible rétention*, *Jeux décevants & controversés* (41 % d'avis positifs).
+- **Vitalité** : les « classiques durables » (≥ 5 ans et toujours joués) sont les mieux notés (86 % d'avis positifs).
+
+---
+
+## Architecture Médaillon
+
+```text
+  Kaggle (CSV)                 Cluster HDFS 3.5 : 1 NameNode + 3 DataNodes
+                               blocs 16 Mo · réplication 2 · panne détectée en ~50 s
+  ┌──────────────────┐         ┌──────────────────────────────────────────────────────────────────┐
+  │ steam_reviews    │   J1    │ BRONZE (Delta)   données brutes + lignage                        │
+  │ 3,76 M avis      ├────────►│   _ingested_at, _source_dataset, _source_file                    │
+  │ steam_games      │ ingest. ├──────────────────────────────────────────────────────────────────┤
+  │ 27 075 jeux      │         │ SILVER (Delta ACID)   1 ligne = 1 avis enrichi du catalogue      │
+  └──────────────────┘   J2    │   BroadcastHashJoin · 8 colonnes métier                          │
+                     nettoyage │   Schema Enforcement · MERGE INTO · Time Travel                  │
+                      jointure ├──────────────────────────────────────────────────────────────────┤
+                               │ GOLD (Delta)   4 tables agrégées                                 │
+                       J3 · J4 │   genre_pareto (DENSE_RANK, cumul)                               │
+                    Spark SQL  │   release_year_trends (LAG) · top_games_by_genre (ROW_NUMBER)    │
+                   + MLlib     │   game_segments (K-Means MLlib) · Silver compactée (OPTIMIZE)    │
+                               └─────────────────────────────────┬────────────────────────────────┘
+                                                                 │ lecture de la couche Gold uniquement
+                                                  ┌──────────────▼─────────────┐
+                                                  │ Streamlit + Plotly · :8501 │
+                                                  └────────────────────────────┘
+```
 
 | Couche | Tables Delta sur HDFS |
 |---|---|
 | Bronze | `/lakehouse/bronze/steam_reviews`, `/lakehouse/bronze/steam_games` |
-| Silver | `/lakehouse/silver/steam_reviews_enriched` (1 ligne = 1 avis enrichi du catalogue), `/lakehouse/silver/steam_games` (catalogue nettoyé) |
-| Gold | `/lakehouse/gold/genre_pareto`, `/lakehouse/gold/release_year_trends`, `/lakehouse/gold/top_games_by_genre` (J3) ; `/lakehouse/gold/game_segments` (J4 : 1 ligne = 1 jeu, segment K-Means + profil de vitalité) |
-| Dashboard | `app/dashboard.py` (http://localhost:8501) : lit uniquement la couche Gold ; filtres genre / année de sortie / segment, 5 graphiques Plotly, requête SQL et justification statistique sous chaque analyse |
+| Silver | `/lakehouse/silver/steam_reviews_enriched` (3 763 740 avis × 31 colonnes), `/lakehouse/silver/steam_games` |
+| Gold | `/lakehouse/gold/genre_pareto`, `/lakehouse/gold/release_year_trends`, `/lakehouse/gold/top_games_by_genre`, `/lakehouse/gold/game_segments` |
 
-**Résultats clés (J4)** : 3 tests non paramétriques au grain jeu (Spearman temps de jeu ~ satisfaction, Kruskal-Wallis satisfaction ~ gamme de prix, χ² utilité ~ recommandation) et segmentation K-Means Spark ML (k = 5) de 3 438 jeux : *Hits premium à forte rétention*, *Anciens classiques du catalogue*, *Pépites de niche appréciées*, *Free-to-play à faible rétention*, *Jeux décevants & controversés*.
+## Stack technique
+
+| Domaine | Technologies |
+|---|---|
+| Infrastructure | Docker Compose, Ubuntu 26.04 (images multi-architecture amd64 / arm64), go-task |
+| Stockage distribué | Apache Hadoop HDFS 3.5 (1 NameNode + 3 DataNodes, blocs 16 Mo, réplication 2) |
+| Calcul | Apache Spark 4.2 (PySpark, Spark SQL, fenêtres analytiques), Python 3.15 |
+| Format de table | Delta Lake 4.4 (ACID, Schema Enforcement, MERGE, Time Travel, OPTIMIZE) |
+| Statistiques & ML | SciPy (Spearman, Kruskal-Wallis, Mann-Whitney, χ²), Spark MLlib (VectorAssembler, StandardScaler, KMeans), scikit-learn (validation croisée de la segmentation) |
+| Restitution | Streamlit 1.67, Plotly 7, thème sombre inspiré de Steam |
+| Qualité | Ruff, pytest + `streamlit.testing` (AppTest), exécution nbconvert des notebooks |
 
 ---
 
-Environnement pédagogique complet compatible nativement **`linux/amd64` (PC x86_64 / WSL2)** et **`linux/arm64` (Apple Silicon M1–M4 / Linux ARM64)** sur **Ubuntu 26.04 LTS**, reposant sur un **cluster HDFS 3.5 réel distribué (1 NameNode + 3 DataNodes)** avec blocs réduits à **16 Mo** et détection de panne abaissée à **~50 secondes**, couplé à une image mutualisée légère (`ubuntu:26.04` + **Python 3.15** via `uv` + OpenJDK 21 + JARs Delta pré-embarqués) pour **PySpark 4.2**, **Delta Lake 4.4**, **JupyterLab 4.6** et **Streamlit**.
+## Dashboard
 
-Chaque étudiant / groupe **choisit librement sa thématique métier et combine un dataset multi-tables ou plusieurs datasets publics complémentaires sur Kaggle** (croisés par jointure distribuée) pour construire de bout en bout une architecture **Data Lakehouse Médaillon (Bronze → Silver → Gold → Dashboard)**.
+Le dashboard lit **uniquement la couche Gold** (4 tables Delta, mises en cache) et s'organise en 5 onglets,
+chacun avec un éclairage métier et la requête SQL + la justification statistique de chaque analyse :
 
-```mermaid
-flowchart LR
-    K1["Dataset Kaggle #1 (Faits)<br/>data_raw/source_1/"] --> B["Bronze (Multi-tables)<br/>/lakehouse/bronze"]
-    K2["Dataset Kaggle #2 (Enrichissement)<br/>data_raw/source_2/"] --> B
-    B -->|"Nettoyage & Jointure Spark"| S["Silver (ACID Delta)<br/>/lakehouse/silver"]
-    S --> G["Gold (KPI & Segments)<br/>/lakehouse/gold"]
-    G --> ST["Dashboard Streamlit<br/>(:8501)"]
+| Onglet | Contenu |
+|---|---|
+| **Vue exécutive** | KPI du corpus (avis, jeux, satisfaction) avec mini-tendances, KPI du périmètre filtré avec écarts, satisfaction / utilité / polarisation par gamme de prix, gratuit vs payant |
+| **Pareto & genres** | Courbe de Pareto (seuil 80 %, classes A/B/C), moyenne vs médiane, distributions médiane + IQR, top 10 par genre (borne de Wilson) |
+| **Dynamique & vitalité** | Cohortes annuelles en petits multiples (volume, prix, satisfaction), variations `LAG`, profils de vitalité « toujours joué vs jeu mort » |
+| **Temps de jeu & segments** | Satisfaction par tranche de temps de jeu, centroïdes K-Means, exploration interactive d'un segment, recommandations stratégiques |
+| **Architecture & méthode** | Pipeline Médaillon, chiffres clés de l'infrastructure, qualité des données et compromis |
 
-    subgraph HDFS["Cluster HDFS (blocs 16 Mo, réplication = 2)"]
-      NN["NameNode (:9870 / :9000)"]
-      DN1["DataNode 1"]
-      DN2["DataNode 2"]
-      DN3["DataNode 3"]
-    end
+Filtres de la barre latérale : genres, gamme de prix, années de sortie, segments K-Means, profils de vitalité.
 
-    B -.-> HDFS
-    S -.-> HDFS
-    G -.-> HDFS
+### Aperçu
+
+Les captures d'écran sont rangées dans [`docs/screenshots/`](docs/screenshots/) (noms attendus dans le README de ce dossier).
+
+<!-- Décommenter une fois les captures ajoutées :
+![Vue exécutive](docs/screenshots/01-vue-executive.png)
+![Pareto & genres](docs/screenshots/02-pareto-genres.png)
+![Dynamique & vitalité](docs/screenshots/03-dynamique-vitalite.png)
+![Temps de jeu & segments](docs/screenshots/04-segments-kmeans.png)
+![Architecture & méthode](docs/screenshots/05-architecture.png)
+-->
+
+---
+
+## Lancer le projet
+
+Prérequis : Docker Desktop (8 Go de RAM recommandés) et [go-task](https://taskfile.dev) (ou `mise install`).
+
+```bash
+# 1. Construire les images et démarrer le cluster (attend les 3 DataNodes, Jupyter et Streamlit)
+task up
+
+# 2. Télécharger les deux datasets Kaggle, puis placer les fichiers préparés (voir la note ci-dessous) :
+#    data_raw/steam-reviews/steam_reviews.csv et data_raw/steam-store-games/steam_games.csv
+task data:download DATASET="andrewmvd/steam-reviews,nikdavis/steam-store-games"
+
+# 3. Exécuter le pipeline complet J1 → J4 (Bronze, Silver, Gold) et valider l'infrastructure
+task test:all
+
+# 4. Ouvrir le dashboard puis lancer ses tests automatisés
+#    http://localhost:8501
+task test:dashboard
 ```
 
----
+> **Préparation des avis** : le fichier Kaggle complet (`dataset.csv`, 6,4 M avis avec leur texte) est
+> réduit hors dépôt aux colonnes `app_id, app_name, review_score, review_votes`, filtré sur les jeux présents
+> dans le catalogue (5,86 M avis), puis échantillonné uniformément (ratio 0,6423, graine 42) pour obtenir
+> `steam_reviews.csv` : 3 763 740 avis, ~100 Mo. Les données ne sont jamais versionnées (`data_raw/` est
+> ignoré par Git).
 
-## Critères de choix de vos Datasets Kaggle (Mono ou Multi-Sources avec Jointure)
+| Service | URL |
+|---|---|
+| **Dashboard Streamlit** | http://localhost:8501 |
+| JupyterLab (token `bigdata`) | http://localhost:8888 |
+| HDFS NameNode UI | http://localhost:9870 |
+| Spark Web UI (session active) | http://localhost:4040 |
 
-Pour tirer pleinement parti de l'infrastructure distribuée, des jointures Spark (Jour 2) et des exercices statistiques (Jours 3 & 4), choisissez sur [Kaggle Datasets](https://www.kaggle.com/datasets) **soit un dataset relationnel multi-tables, soit 2 (ou plusieurs) datasets complémentaires** respectant ces critères :
-
-1. **Volumétrie cumulée : ~50 Mo à 500 Mo** (avec au moins un fichier dépassant **20 à 32 Mo** afin d'observer physiquement le découpage multi-blocs de **16 Mo** sur HDFS au Jour 1).
-2. **Axe de jointure clair entre tables / datasets** :
-   - **Jointure temporelle** (`date`, `jour + heure`, `yyyy-MM`) — *ex. courses de mobilité / vols aériens / consommation électrique × relevés météo horaires ou calendrier des jours fériés*.
-   - **Jointure géographique** (`code pays ISO`, `ville / État`, `code postal`, `aéroport IATA`) — *ex. commandes e-commerce / immobilier / santé × indicateurs socio-démographiques ou référentiel géographique*.
-   - **Jointure par identifiant ou nomenclature métier** (`product_id`, `category`, `station_id`, `carrier_code`).
-3. **Richesse des attributs** :
-   - Au moins **une colonne temporelle** (dates / timestamps d'événements) pour les analyses de séries et de croissance (`LAG`).
-   - Des **variables quantitatives continues** (montants, durées, distances, consommations, retards, températures...) permettant d'étudier l'asymétrie (médiane vs moyenne, IQR) et de tester statistiquement l'effet croisé entre vos datasets au Jour 4.
-   - Des **dimensions catégorielles ou géographiques** permettant de pratiquer le *Broadcast Hash Join* (et/ou *SortMergeJoin*) sans explosion N-à-M.
-
----
-
-## Arborescence du dépôt
+## Structure du dépôt
 
 ```text
 .
-├── .devcontainer/
-│   └── devcontainer.json       # Connexion VS Code directe au conteneur spark-jupyter
-├── .vscode/
-│   ├── extensions.json         # Extensions recommandées (Python, Jupyter, Ruff, Docker, Task)
-│   ├── launch.json             # Débogage PySpark & prévisualisation Streamlit (:8502)
-│   ├── settings.json           # Kernel Python/Jupyter pré-configuré, Ruff & propreté éditeur
-│   └── tasks.json              # Actions VS Code en 1 clic (Démarrer, Télécharger Kaggle, Crash-test...)
-├── docker-compose.yml          # Cluster HDFS (1 NN + 3 DN) + JupyterLab + Streamlit
-├── Taskfile.yml                # Orchestration go-task (démarrage, crash-test, tests J1..J4)
-├── mise.toml                   # Gestionnaire d'outils (go-task, uv, python 3.15)
-├── pyproject.toml              # Dépendances Python compatibles uv (Python >= 3.15)
-├── config/
-│   ├── core-site.xml           # Point d'entrée RPC hdfs://namenode:9000
-│   ├── hdfs-site.xml           # Blocs 16 Mo, réplication=2, détection panne ~50s
-│   └── spark-defaults.conf     # Pré-configuration automatique HDFS + Delta Lake
-├── docker/
-│   ├── hadoop/
-│   │   └── Dockerfile          # Image HDFS 3.5.0 Ubuntu 26.04 native multi-arch (amd64 & arm64)
-│   └── workspace/
-│       ├── Dockerfile          # Image Ubuntu 26.04 multi-arch (Python 3.15 + uv + OpenJDK 21 + Delta 4.4)
-│       └── requirements.txt    # Dépendances Python 3.15 pour le workspace
-├── data_raw/                   # Dépôt local de vos fichiers Kaggle avant ingestion HDFS
-├── notebooks/                  # Notebooks TP pas-à-pas agnostiques (Jours 1 à 4)
-│   ├── J1_HDFS_Ingestion_Bronze.ipynb
-│   ├── J2_Spark_Delta_Silver.ipynb
-│   ├── J3_Analytics_SQL_Gold.ipynb
-│   └── J4_Stats_Segmentation_Dashboard.ipynb
-└── app/
-    └── dashboard.py            # Squelette Streamlit connecté à /lakehouse/gold/
+├── app/
+│   ├── dashboard.py            # Dashboard Streamlit (5 onglets, lecture Gold uniquement)
+│   └── test_dashboard.py       # Tests AppTest : rendu, filtres, cas vides (task test:dashboard)
+├── notebooks/
+│   ├── J1_HDFS_Ingestion_Bronze.ipynb        # HDFS, blocs 16 Mo, crash-test DataNode, Bronze
+│   ├── J2_Spark_Delta_Silver.ipynb           # Qualité, BroadcastHashJoin, ACID, MERGE, Time Travel
+│   ├── J3_Analytics_SQL_Gold.ipynb           # Skewness, Pareto, LAG, ROW_NUMBER, OPTIMIZE
+│   └── J4_Stats_Segmentation_Dashboard.ipynb # Tests SciPy, EDA, K-Means Spark MLlib, Gold segments
+├── docs/screenshots/           # Captures du dashboard pour ce README
+├── config/                     # core-site.xml, hdfs-site.xml (16 Mo, réplication 2), spark-defaults.conf
+├── docker/                     # Images Hadoop HDFS 3.5 et workspace PySpark / Delta / Streamlit
+├── docker-compose.yml          # 1 NameNode + 3 DataNodes + JupyterLab + Streamlit (thème Steam)
+├── Taskfile.yml                # Démarrage, crash-test, tests J1..J4 et dashboard
+└── data_raw/                   # Datasets Kaggle locaux (jamais versionnés)
 ```
 
----
+## Ce que démontre chaque étape
 
-## Démarrage rapide
-
-### Avec `mise` et `go-task` (recommandé)
-
-```bash
-# 1. Installer automatiquement task (go-task) et uv si absents
-mise trust && mise install
-
-# 2. Construire l'image et démarrer tout le cluster (attend la disponibilité des 3 DataNodes)
-task up
-
-# 3. Télécharger un ou plusieurs datasets Kaggle dans data_raw/<nom-dataset>/
-task data:download DATASET="auteur1/dataset-1,auteur2/dataset-2"
-```
-
-### Sans `task` (commandes Docker natives)
-
-```bash
-docker compose up -d --build
-```
-
----
-
-## Interfaces exposées
-
-| Service | URL | Détails |
+| Étape | Notions mises en œuvre | Preuves dans le notebook |
 |---|---|---|
-| **HDFS NameNode UI** | http://localhost:9870 | Onglets *Datanodes* & *Utilities > Browse the file system* |
-| **JupyterLab** | http://localhost:8888 | Mot de passe / Token : `bigdata` |
-| **Spark Web UI** | http://localhost:4040 | DAG, Stages & Shuffle *(actif dès qu'une `SparkSession` tourne)* |
-| **Dashboard Streamlit** | http://localhost:8501 | Lecture des tables Delta de `/lakehouse/gold/` avec cache 60s |
+| **J1 · HDFS & Bronze** | Découpage en blocs, réplication, tolérance aux pannes, data locality | 7 blocs de 16 Mo pour 100 Mo ; arrêt de `datanode2` : lecture continue, 0 bloc perdu, ré-réplication en 76 s |
+| **J2 · Silver** | Nettoyage, jointure distribuée, garanties ACID | `BroadcastHashJoin` dans `explain()`, schéma incompatible rejeté, `MERGE` idempotent (500 insertions + 500 mises à jour), Time Travel |
+| **J3 · Gold** | Statistiques robustes, fenêtres SQL, small files | Skewness 14,6 → médiane + IQR ; Pareto `DENSE_RANK`, `LAG`, `ROW_NUMBER` + borne de Wilson ; `OPTIMIZE` 15 → 1 fichier |
+| **J4 · Stats & ML** | Tests non paramétriques, EDA, K-Means | 3 tests avec H0/H1 et tailles d'effet ; `log1p` + `StandardScaler` ; k par coude + silhouette ; segments nommés et validés |
+
+### Choix méthodologiques assumés
+
+- **Pas de texte d'avis** : écarté à l'ingestion pour respecter le dimensionnement ; compensé par l'utilité des avis (`is_helpful`) et leur polarisation (`is_contrarian_review`).
+- **99,2 % de lignes identiques** dans les avis : ce sont des avis distincts sans identifiant ; le dédoublonnage ne porte que sur la clé du catalogue.
+- **Temps de jeu = 0** : valeur non mesurée par SteamSpy pour les petits jeux, exclue et jamais imputée.
+- **Biais de collecte après 2016** (moins de 3 % des sorties couvertes) : années écartées des tendances (`is_reliable`).
 
 ---
 
-## Travailler dans VS Code (Kernel Jupyter & Conteneur pré-configurés)
+## Environnement technique du cours
 
-### Option A — Mode Dev Container intégré *(recommandé : auto-complétion PySpark, Ruff, Git & Kernel en 1 clic)*
+Environnement pédagogique compatible nativement **`linux/amd64` (PC x86_64 / WSL2)** et **`linux/arm64` (Apple Silicon M1–M4 / Linux ARM64)** sur **Ubuntu 26.04 LTS**, reposant sur un **cluster HDFS 3.5 réel distribué (1 NameNode + 3 DataNodes)** avec blocs réduits à **16 Mo** et détection de panne abaissée à **~50 secondes**, couplé à une image mutualisée légère (`ubuntu:26.04` + **Python 3.15** via `uv` + OpenJDK 21 + JARs Delta pré-embarqués) pour **PySpark 4.2**, **Delta Lake 4.4**, **JupyterLab 4.6** et **Streamlit**.
+
+### Travailler dans VS Code (Kernel Jupyter & Conteneur pré-configurés)
+
+**Option A — Mode Dev Container intégré** *(auto-complétion PySpark, Ruff, Git & Kernel en 1 clic)*
 1. Ouvrez ce dossier dans VS Code et installez l'extension recommandée **Dev Containers** (`ms-vscode-remote.remote-containers`).
 2. Cliquez sur **Reopen in Container** (ou `Ctrl+Shift+P` → `Dev Containers: Reopen in Container`).
-3. VS Code vous connecte directement dans `spark-jupyter` (`/workspace`) avec le kernel **`Python 3.15 (PySpark 4.2 + Delta Lake 4.4)`**, Pylance, Ruff, `git`, `jq` et `pytest` prêts à l'emploi.
+3. VS Code vous connecte directement dans `spark-jupyter` (`/workspace`) avec le kernel **`Python 3.15 (PySpark 4.2 + Delta Lake 4.4)`**.
 
-### Option B — Mode Léger depuis l'hôte *(idéal pour les PC portables à 8 Go de RAM)*
+**Option B — Mode léger depuis l'hôte** *(idéal pour les PC portables à 8 Go de RAM)*
 1. Lancez `task up`.
 2. Ouvrez un notebook dans `notebooks/`, cliquez sur **Select Kernel** → **Existing Jupyter Server...** → `http://localhost:8888/?token=bigdata`.
 
----
-
-## Programme des Notebooks (`notebooks/`)
-
-1. **`J1_HDFS_Ingestion_Bronze.ipynb` — Cadrage du sujet, HDFS & Tolérance aux pannes**
-   - Sélection et téléchargement de votre dataset Kaggle via `kagglehub`.
-   - Téléversement sur HDFS, inspection du découpage en **blocs de 16 Mo** et de la **Data Locality** (`1 bloc = 1 partition Spark`).
-   - **Crash-test en direct** : arrêt de `datanode2`, détection en ~50s, auto-réplication sur le 3e DataNode et lecture sans interruption.
-   - Ingestion vers la couche **Bronze** (`/lakehouse/bronze/`) au format Delta Lake avec métadonnées de traçabilité.
-2. **`J2_Spark_Delta_Silver.ipynb` — Nettoyage, Jointures distribuées & Transactions ACID**
-   - Profilage qualité, typage fort, dédoublonnage et création d'indicateurs métier propres à votre sujet.
-   - Optimisation des jointures (**Broadcast Hash Join** vs SortMergeJoin) et prévention des produits cartésiens N-M.
-   - Garanties ACID Delta Lake sur `/lakehouse/silver/` : `_delta_log`, **Schema Enforcement**, **Upsert (`MERGE INTO`)** et **Time Travel (`VERSION AS OF`)**.
-3. **`J3_Analytics_SQL_Gold.ipynb` — Spark SQL avancé, Rigueur statistique & Couche Gold**
-   - Diagnostic d'asymétrie (`SKEWNESS`) : justification statistique du couple **Médiane (`PERCENTILE_APPROX`) + IQR** face à la moyenne.
-   - Fonctions de fenêtrage SQL (`DENSE_RANK`, courbe cumulée de **Pareto**, `ROW_NUMBER`, évolution temporelle `LAG`).
-   - Alimentation de vos tables **Gold** (`/lakehouse/gold/`) et compaction `OPTIMIZE`.
-4. **`J4_Stats_Segmentation_Dashboard.ipynb` — Tests statistiques, Segmentation & Dashboard**
-   - Tests d'hypothèses non-paramétriques (`scipy.stats` : **Mann-Whitney U**, **Kruskal-Wallis**, **Spearman**).
-   - Segmentation / typologie non supervisée (**K-Means** avec `log1p` + `StandardScaler`) enregistrée en couche Gold.
-   - Restitution décisionnelle interactive et documentée dans `app/dashboard.py` sur `http://localhost:8501`.
-
----
-
-## Commandes `task` principales (`Taskfile.yml`)
+### Commandes `task` principales (`Taskfile.yml`)
 
 ```bash
 task up                                  # Démarrer le cluster et attendre les 3 DataNodes + Jupyter + Streamlit
@@ -183,7 +202,20 @@ task hdfs:fsck                           # Inspecter les blocs de 16 Mo et leurs
 task hdfs:crash-dn2                      # [TP Jour 1] Couper datanode2 pour observer l'auto-réparation en ~50s
 task hdfs:restore-dn2                    # [TP Jour 1] Relancer datanode2
 task test:docker                         # Vérifier la santé de HDFS, JupyterLab et Streamlit
-task test:notebooks                      # Exécuter et valider vos 4 notebooks (J1 -> J4)
+task test:notebooks                      # Exécuter et valider les 4 notebooks (J1 -> J4)
+task test:dashboard                      # Tester le dashboard sur les vraies tables Gold (AppTest)
+task test:all                            # Infrastructure + notebooks J1 -> J4
 task down                                # Arrêter les conteneurs (conserve les volumes HDFS)
 task clean                               # Arrêter et purger les volumes HDFS
 ```
+
+<details>
+<summary><b>Consignes du TP : critères de choix des datasets Kaggle</b></summary>
+
+Chaque étudiant / groupe **choisit librement sa thématique métier et combine un dataset multi-tables ou plusieurs datasets publics complémentaires sur Kaggle** (croisés par jointure distribuée) pour construire de bout en bout une architecture **Data Lakehouse Médaillon (Bronze → Silver → Gold → Dashboard)**. Critères :
+
+1. **Volumétrie cumulée : ~50 Mo à 500 Mo** (avec au moins un fichier dépassant **20 à 32 Mo** afin d'observer physiquement le découpage multi-blocs de **16 Mo** sur HDFS au Jour 1).
+2. **Axe de jointure clair entre tables / datasets** : jointure temporelle (`date`, `yyyy-MM`), géographique (code pays ISO, ville, code postal) ou par identifiant / nomenclature métier (`product_id`, `category`, `station_id`).
+3. **Richesse des attributs** : au moins une colonne temporelle (séries et `LAG`), des variables quantitatives continues (asymétrie, médiane vs moyenne, IQR, tests du Jour 4) et des dimensions catégorielles ou géographiques (*Broadcast Hash Join* sans explosion N-à-M).
+
+</details>
