@@ -17,7 +17,10 @@
 |---|---|
 | Bronze | `/lakehouse/bronze/steam_reviews`, `/lakehouse/bronze/steam_games` |
 | Silver | `/lakehouse/silver/steam_reviews_enriched` (1 ligne = 1 avis enrichi du catalogue), `/lakehouse/silver/steam_games` (catalogue nettoyé) |
-| Gold | `/lakehouse/gold/genre_pareto`, `/lakehouse/gold/release_year_trends`, `/lakehouse/gold/top_games_by_genre` |
+| Gold | `/lakehouse/gold/genre_pareto`, `/lakehouse/gold/release_year_trends`, `/lakehouse/gold/top_games_by_genre` (J3) ; `/lakehouse/gold/game_segments` (J4 : 1 ligne = 1 jeu, segment K-Means + profil de vitalité) |
+| Dashboard | `app/dashboard.py` (http://localhost:8501) : lit uniquement la couche Gold ; filtres genre / année de sortie / segment, 5 graphiques Plotly, requête SQL et justification statistique sous chaque analyse |
+
+**Résultats clés (J4)** : 3 tests non paramétriques au grain jeu (Spearman temps de jeu ~ satisfaction, Kruskal-Wallis satisfaction ~ gamme de prix, χ² utilité ~ recommandation) et segmentation K-Means Spark ML (k = 5) de 3 438 jeux : *Hits premium à forte rétention*, *Anciens classiques du catalogue*, *Pépites de niche appréciées*, *Free-to-play à faible rétention*, *Jeux décevants & controversés*.
 
 ---
 
